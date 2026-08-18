@@ -296,6 +296,20 @@
 
   .loading{display:flex;align-items:center;justify-content:center;min-height:60vh;color:var(--ink-soft);font-size:14px;}
   .hidden{display:none !important;}
+
+  .block-overlay{
+    position:fixed;inset:0;z-index:500;
+    background:rgba(237,238,223,.9);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+  }
+  .block-overlay .spinner{
+    width:38px;height:38px;border-radius:50%;
+    border:3.5px solid var(--moss-soft);border-top-color:var(--moss);
+    animation:spin .8s linear infinite;
+  }
+  .block-overlay .msg{font-size:14px;font-weight:600;color:var(--ink-soft);}
+  @keyframes spin{to{transform:rotate(360deg);}}
 </style>
 </head>
 <body>
@@ -424,6 +438,19 @@ function toast(msg){
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'), 2200);
+}
+// 全螢幕遮罩：擋住整個畫面點擊，避免使用者在登入處理期間亂點造成重複觸發
+function showBlockOverlay(msg){
+  hideBlockOverlay();
+  const el = document.createElement('div');
+  el.className = 'block-overlay';
+  el.id = 'blockOverlay';
+  el.innerHTML = `<div class="spinner"></div><div class="msg">${esc(msg||'處理中，請稍候…')}</div>`;
+  document.body.appendChild(el);
+}
+function hideBlockOverlay(){
+  const el = document.getElementById('blockOverlay');
+  if(el) el.remove();
 }
 function logoImgTag(cls){
   return `<img src="${DEFAULT_LOGO}" class="${cls}" onerror="this.outerHTML='<div class=&quot;logo-fallback&quot;>🐾</div>'">`;
@@ -708,6 +735,7 @@ function renderCurrentView(){
 
 /* ================= EMAIL 驗證畫面 ================= */
 function renderEmailVerificationView(user){
+  hideBlockOverlay();
   const email = (user && user.email) ? user.email : '';
   root.innerHTML = `
     <div class="auth-wrap">
@@ -787,6 +815,7 @@ function friendlyAuthError(err){
   return (err && map[err.code]) || (err && err.message) || '發生未知錯誤';
 }
 function renderAuth(){
+  hideBlockOverlay();
   const isReset = authMode==='reset';
   root.innerHTML = `
     <div class="auth-wrap">
@@ -840,8 +869,7 @@ function renderAuth(){
       const errBox = document.getElementById('authError');
       errBox.innerHTML = '';
       gBtn.disabled = true;
-      const originalHTML = gBtn.innerHTML;
-      gBtn.innerHTML = '登入中，請稍候…';
+      showBlockOverlay('登入中，請稍候…');
       try{
         const cred = await auth.signInWithPopup(googleProvider);
         // 第一次用 Google 登入的人，順便幫他建立 users 文件（既有帳號則不覆蓋）
@@ -857,10 +885,14 @@ function renderAuth(){
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
         }
+        // 成功後 onAuthStateChanged 會接手渲染下一個畫面並重新整理整個 root，
+        // 遮罩不用主動關掉，畫面切換時會被一起換掉。
       }catch(err){
-        errBox.innerHTML = `<div class="auth-err">${esc(friendlyAuthError(err))}</div>`;
+        hideBlockOverlay();
         gBtn.disabled = false;
-        gBtn.innerHTML = originalHTML;
+        // 使用者自己取消登入視窗不算錯誤，不用嚇他
+        if(err && err.code === 'auth/popup-closed-by-user') return;
+        errBox.innerHTML = `<div class="auth-err">${esc(friendlyAuthError(err))}</div>`;
       }
     };
   }
@@ -892,9 +924,11 @@ async function handleAuthSubmit(){
   const pass = document.getElementById('authPass').value;
   if(!email || !pass){ errBox.innerHTML = `<div class="auth-err">請輸入 Email 和密碼</div>`; return; }
   btn.disabled = true; btn.textContent = '處理中…';
+  if(authMode==='login') showBlockOverlay('登入中，請稍候…');
   try{
     if(authMode==='login'){
       await auth.signInWithEmailAndPassword(email, pass);
+      // 成功後 onAuthStateChanged 接手渲染，遮罩會在下一個畫面渲染時被清掉
     } else {
       const name = document.getElementById('regName').value.trim();
       if(!name){ errBox.innerHTML = `<div class="auth-err">請輸入你的名字或暱稱</div>`; btn.disabled=false; btn.textContent=btnLabel; return; }
@@ -918,6 +952,7 @@ async function handleAuthSubmit(){
       return;
     }
   }catch(e){
+    hideBlockOverlay();
     errBox.innerHTML = `<div class="auth-err">${esc(friendlyAuthError(e))}</div>`;
   }
   btn.disabled = false; btn.textContent = btnLabel;
@@ -925,6 +960,7 @@ async function handleAuthSubmit(){
 
 /* ================= APP SHELL ================= */
 function renderApp(){
+  hideBlockOverlay();
   root.innerHTML = `
     <div class="topbar">
       <div class="brand">
