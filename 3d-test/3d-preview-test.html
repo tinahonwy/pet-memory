@@ -19,7 +19,9 @@
   .swatch-row{display:flex;gap:8px;margin-top:8px;}
   .swatch-row button{width:36px;height:36px;border-radius:8px;border:2px solid transparent;cursor:pointer;}
   .swatch-row button.active{border-color:#26301F;}
-  #status{font-size:12px;color:#9C5F34;padding:10px 20px;}
+  #status{font-size:12px;color:#9C5F34;padding:10px 20px;white-space:pre-wrap;line-height:1.6;}
+  #status.err{color:#AE4A34;font-family:monospace;font-size:11px;}
+  #status.ok{color:#4C6B3F;}
 </style>
 </head>
 <body>
@@ -41,100 +43,134 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
 const statusEl = document.getElementById('status');
 const wrap = document.getElementById('canvas-wrap');
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xFFFFFC);
-
-const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth / wrap.clientHeight, 0.1, 100);
-camera.position.set(0, 0.6, 3.2);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(wrap.clientWidth, wrap.clientHeight);
-renderer.setPixelRatio(window.devicePixelRatio || 1);
-wrap.appendChild(renderer.domElement);
-
-// 燈光：一盞主光 + 環境光，讓模型看起來立體但不會死黑
-const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-scene.add(ambient);
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-dirLight.position.set(2, 3, 4);
-scene.add(dirLight);
-const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-dirLight2.position.set(-2, 1, -3);
-scene.add(dirLight2);
-
-let catMesh = null;
-let rotateSpeed = 0.006;
-
-// 用簡單的 OBJ 手動解析（避免額外依賴 OBJLoader 外部檔案），
-// 這裡改用最穩妥的方式：直接抓取轉檔時輸出的 glb，用原生 GLTFLoader。
-const loaderScript = document.createElement('script');
-loaderScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.js';
-loaderScript.onload = () => {
-  const loader = new THREE.GLTFLoader();
-  loader.load('./cat.glb', (gltf) => {
-    const model = gltf.scene;
-    model.traverse(obj => {
-      if(obj.isMesh){
-        catMesh = obj;
-        obj.material = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(document.getElementById('colorPicker').value),
-          roughness: 0.85,
-          metalness: 0.05
-        });
-      }
-    });
-    scene.add(model);
-    statusEl.textContent = '✅ 模型載入成功，可以用下方調色盤試試套色效果';
-    statusEl.style.color = '#4C6B3F';
-  }, undefined, (err) => {
-    statusEl.textContent = '❌ 模型載入失敗：' + err.message + '（確認 cat.glb 跟這個 html 檔案放在同一層資料夾）';
-    statusEl.style.color = '#AE4A34';
-    console.error(err);
-  });
-};
-document.head.appendChild(loaderScript);
-
-function animate(){
-  requestAnimationFrame(animate);
-  if(catMesh) catMesh.parent.rotation.y += rotateSpeed;
-  renderer.render(scene, camera);
+function setStatus(msg, cls){
+  statusEl.textContent = msg;
+  statusEl.className = cls || '';
 }
-animate();
 
-window.addEventListener('resize', () => {
-  camera.aspect = wrap.clientWidth / wrap.clientHeight;
-  camera.updateProjectionMatrix();
+try{
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xFFFFFC);
+
+  const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth / wrap.clientHeight, 0.1, 100);
+  camera.position.set(0, 0.6, 3.2);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(wrap.clientWidth, wrap.clientHeight);
-});
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  wrap.appendChild(renderer.domElement);
 
-// 套色控制
-document.getElementById('colorPicker').addEventListener('input', (e) => {
-  if(catMesh) catMesh.material.color.set(e.target.value);
-});
-document.getElementById('rotateSpeed').addEventListener('input', (e) => {
-  rotateSpeed = Number(e.target.value);
-});
+  const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+  scene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  dirLight.position.set(2, 3, 4);
+  scene.add(dirLight);
+  const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+  dirLight2.position.set(-2, 1, -3);
+  scene.add(dirLight2);
 
-// 快速色票：布朗尼分析出來的顏色，方便直接點選測試
-const testColors = ['#151413', '#060505', '#2c2924', '#979185', '#BE7A46', '#F1E2CE'];
-const swatchRow = document.getElementById('quickSwatches');
-testColors.forEach(hex => {
-  const btn = document.createElement('button');
-  btn.style.background = hex;
-  btn.onclick = () => {
-    document.getElementById('colorPicker').value = hex;
-    if(catMesh) catMesh.material.color.set(hex);
-    swatchRow.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-  };
-  swatchRow.appendChild(btn);
-});
+  let catMesh = null;
+  let rotateSpeed = 0.006;
+
+  const loader = new GLTFLoader();
+  setStatus('正在下載 cat.glb…');
+
+  // 用絕對於「這個 html 檔案所在資料夾」的相對路徑抓模型，
+  // 用 import.meta.url 算出來，比單純寫 './cat.glb' 更不容易因為部署路徑不同而抓錯。
+  const modelUrl = new URL('./cat.glb', import.meta.url).href;
+
+  loader.load(
+    modelUrl,
+    (gltf) => {
+      const model = gltf.scene;
+      model.traverse(obj => {
+        if(obj.isMesh){
+          catMesh = obj;
+          obj.material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(document.getElementById('colorPicker').value),
+            roughness: 0.85,
+            metalness: 0.05
+          });
+        }
+      });
+      scene.add(model);
+      setStatus('✅ 模型載入成功，可以用下方調色盤試試套色效果', 'ok');
+    },
+    (progress) => {
+      if(progress.total){
+        const pct = Math.round(progress.loaded / progress.total * 100);
+        setStatus(`正在下載 cat.glb…（${pct}%）`);
+      }
+    },
+    (err) => {
+      setStatus('❌ 模型載入失敗\n嘗試的路徑：' + modelUrl + '\n錯誤內容：' + (err && err.message ? err.message : String(err)) + '\n\n請確認 cat.glb 是否跟這個 html 檔案放在同一層資料夾，檔名大小寫是否完全一致。', 'err');
+      console.error('GLTF load error:', err);
+    }
+  );
+
+  function animate(){
+    requestAnimationFrame(animate);
+    if(catMesh) catMesh.parent.rotation.y += rotateSpeed;
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = wrap.clientWidth / wrap.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+  });
+
+  document.getElementById('colorPicker').addEventListener('input', (e) => {
+    if(catMesh) catMesh.material.color.set(e.target.value);
+  });
+  document.getElementById('rotateSpeed').addEventListener('input', (e) => {
+    rotateSpeed = Number(e.target.value);
+  });
+
+  const testColors = ['#151413', '#060505', '#2c2924', '#979185', '#BE7A46', '#F1E2CE'];
+  const swatchRow = document.getElementById('quickSwatches');
+  testColors.forEach(hex => {
+    const btn = document.createElement('button');
+    btn.style.background = hex;
+    btn.onclick = () => {
+      document.getElementById('colorPicker').value = hex;
+      if(catMesh) catMesh.material.color.set(hex);
+      swatchRow.querySelectorAll('button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+    };
+    swatchRow.appendChild(btn);
+  });
+
+}catch(err){
+  setStatus('❌ 初始化失敗：' + err.message + '\n\n可能是瀏覽器不支援 ES Module 或 WebGL，換個瀏覽器（Chrome/Edge/Safari 最新版）試試看。', 'err');
+  console.error(err);
+}
+
+// 保險：如果 15 秒後狀態還停在「載入中」，代表可能連 script 本身都沒跑起來
+// （例如 import map 被瀏覽器擋掉），額外提示一次
+setTimeout(() => {
+  if(statusEl.textContent.includes('載入中') && !statusEl.textContent.includes('下載')){
+    setStatus('❌ 一直停在「載入中」，可能是瀏覽器版本太舊不支援 import map。\n請改用最新版 Chrome、Edge 或 Safari 測試。', 'err');
+  }
+}, 15000);
 </script>
 </body>
 </html>
