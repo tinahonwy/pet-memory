@@ -10,7 +10,8 @@
   #info h1{font-size:18px;margin:0 0 4px;}
   #info p{font-size:13px;color:#68705C;margin:0 0 12px;}
   #canvas-wrap{width:100%;height:60vh;position:relative;background:#FFFFFC;}
-  #canvas-wrap canvas{display:block;}
+  #canvas-wrap canvas{display:block;cursor:grab;}
+  #canvas-wrap canvas:active{cursor:grabbing;}
   #controls{padding:16px 20px;background:#FFFFFC;border-top:1px solid #D9DCC5;}
   .field{margin-bottom:14px;}
   .field label{display:block;font-size:12.5px;color:#68705C;margin-bottom:6px;font-weight:600;}
@@ -55,6 +56,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const statusEl = document.getElementById('status');
 const wrap = document.getElementById('canvas-wrap');
@@ -77,6 +79,16 @@ try{
   renderer.setPixelRatio(window.devicePixelRatio || 1);
   wrap.appendChild(renderer.domElement);
 
+  // 滑鼠拖曳可以旋轉視角、滾輪可以縮放，放開拖曳後會繼續原本的自動旋轉
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; // 拖曳放開後有一點慣性滑動，手感比較順
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 1.2;
+  controls.maxDistance = 8;
+  controls.target.set(0, 0, 0);
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 3;
+
   const ambient = new THREE.AmbientLight(0xffffff, 0.7);
   scene.add(ambient);
   const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
@@ -87,7 +99,6 @@ try{
   scene.add(dirLight2);
 
   let catMesh = null;
-  let rotateSpeed = 0.006;
 
   const loader = new GLTFLoader();
   setStatus('正在下載 cat.glb…');
@@ -127,7 +138,7 @@ try{
 
   function animate(){
     requestAnimationFrame(animate);
-    if(catMesh) catMesh.parent.rotation.y += rotateSpeed;
+    controls.update(); // 一定要呼叫，不然阻尼跟自動旋轉都不會生效
     renderer.render(scene, camera);
   }
   animate();
@@ -142,7 +153,9 @@ try{
     if(catMesh) catMesh.material.color.set(e.target.value);
   });
   document.getElementById('rotateSpeed').addEventListener('input', (e) => {
-    rotateSpeed = Number(e.target.value);
+    const v = Number(e.target.value);
+    controls.autoRotate = v > 0;
+    controls.autoRotateSpeed = v * 500; // 滑桿數值很小(0~0.02)，換算成 OrbitControls 習慣的速度單位
   });
 
   const testColors = ['#151413', '#060505', '#2c2924', '#979185', '#BE7A46', '#F1E2CE'];
