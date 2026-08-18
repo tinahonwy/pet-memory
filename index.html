@@ -272,6 +272,12 @@ auth.onAuthStateChanged(async (user)=>{
 
   if(user){
     topBar.classList.remove('hidden');
+    root.innerHTML = `
+      <div class="container" style="text-align:center;padding-top:80px;">
+        <div style="font-size:36px;margin-bottom:10px;">🐾</div>
+        <p class="subtitle" style="margin:0;">登入中，正在準備你的資料…</p>
+      </div>
+    `;
     try{ await db.collection('users').doc(user.uid).set({ emailVerified: true }, {merge:true}); }catch(e){}
     try{
       const snap = await db.collection('users').doc(user.uid).get();
@@ -344,10 +350,18 @@ function renderAuthView(){
   };
 
   document.getElementById('googleSignInBtn').onclick = async ()=>{
+    const btn = document.getElementById('googleSignInBtn');
+    const originalHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '登入中，請稍候…';
     try{
       await auth.signInWithPopup(googleProvider);
+      // 成功後 onAuthStateChanged 會接手渲染下一個畫面，這裡不用做事，
+      // 但保留載入中的文字，避免畫面切換前使用者又點一次按鈕
     }catch(err){
       showMsg('authMsgBox', friendlyAuthError(err));
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
     }
   };
 
