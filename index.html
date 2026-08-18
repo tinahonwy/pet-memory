@@ -810,7 +810,8 @@ function friendlyAuthError(err){
     'auth/too-many-requests':'嘗試太多次了，請稍後再試',
     'auth/network-request-failed':'網路連線失敗，請檢查網路後再試',
     'auth/popup-closed-by-user':'登入視窗已關閉',
-    'auth/unauthorized-domain':'這個網域還沒被授權使用 Google 登入'
+    'auth/unauthorized-domain':'這個網域還沒被授權使用 Google 登入',
+    'auth/account-exists-with-different-credential':'這個 Email 已經用密碼註冊過了，請先用 Email + 密碼登入，再到「個人資料」裡設定連結 Google 帳號'
   };
   return (err && map[err.code]) || (err && err.message) || '發生未知錯誤';
 }
@@ -1008,6 +1009,8 @@ function openProfileModal(){
   overlay.className = 'modal-overlay';
   overlay.id = 'profileModalOverlay';
   const initialColor = currentProfile.color || nameColor(currentUser.uid);
+  const hasPasswordLinked = (auth.currentUser.providerData||[]).some(p=>p.providerId==='password');
+  const hasGoogleLinked = (auth.currentUser.providerData||[]).some(p=>p.providerId==='google.com');
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-head"><h3 class="display">編輯個人資料</h3><button class="modal-close" id="closeProfileModal">✕</button></div>
@@ -1023,6 +1026,31 @@ function openProfileModal(){
         </div>
       </div>
       <div class="submit-row"><button class="btn btn-primary" id="saveProfileBtn">儲存</button></div>
+
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--line);">
+        <div class="friends-section-title">登入方式</div>
+        <p style="font-size:12px;color:var(--ink-soft);line-height:1.7;margin:0 0 12px;">
+          目前已連結：${hasGoogleLinked?'🔵 Google':''}${hasGoogleLinked&&hasPasswordLinked?'　':''}${hasPasswordLinked?'🔑 信箱密碼':''}${!hasGoogleLinked&&!hasPasswordLinked?'—':''}
+        </p>
+        ${!hasGoogleLinked ? `
+          <button class="btn btn-google" id="linkGoogleBtn" style="margin-bottom:14px;">
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.7 2.4 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.6c-.6 3-2.3 5.5-4.9 7.2l7.6 5.9C43.9 37.6 46.5 31.6 46.5 24.5z"/><path fill="#FBBC05" d="M10.5 19.3l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.8l7.9-6.1c-.5-1.4-.8-2.9-.8-4.7s.3-3.3.8-4.7z"/><path fill="#34A853" d="M24 48c6.2 0 11.7-2 15.6-5.6l-7.6-5.9c-2.1 1.4-4.8 2.3-8 2.3-6.3 0-11.6-4.3-13.5-10.1l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
+            連結 Google 帳號
+          </button>
+          <div id="linkGoogleMsg"></div>
+        ` : ''}
+        ${hasPasswordLinked ? `
+          <p style="font-size:12.5px;color:var(--ink-soft);">你已經可以用 Email「${esc(currentUser.email||'')}」搭配密碼登入了。</p>
+        ` : `
+          <p style="font-size:12.5px;color:var(--ink-soft);margin-bottom:10px;">${hasGoogleLinked? '目前只能用 Google 登入。' : ''}設定一組密碼後，之後也能直接用 Email + 密碼登入這個帳號。</p>
+          <div id="setPasswordArea">
+            <div class="field compact"><label>設定密碼</label><input type="password" id="linkPassInput" placeholder="至少 6 個字元"></div>
+            <div class="field compact"><label>確認密碼</label><input type="password" id="linkPassConfirmInput" placeholder="再輸入一次"></div>
+            <div id="linkPassMsg"></div>
+            <button class="btn btn-primary" id="linkPasswordBtn">設定密碼</button>
+          </div>
+        `}
+      </div>
     </div>
   `;
   document.body.appendChild(overlay);
@@ -1071,6 +1099,69 @@ function openProfileModal(){
       btn.disabled=false; btn.textContent='儲存';
     }
   };
+
+  const linkGoogleBtn = document.getElementById('linkGoogleBtn');
+  if(linkGoogleBtn){
+    linkGoogleBtn.onclick = async ()=>{
+      const msgBox = document.getElementById('linkGoogleMsg');
+      msgBox.innerHTML = '';
+      linkGoogleBtn.disabled = true;
+      try{
+        await auth.currentUser.linkWithPopup(googleProvider);
+        msgBox.innerHTML = `<div class="auth-ok">已連結 Google 帳號，之後也能用 Google 登入。</div>`;
+        toast('已連結 Google 帳號 🔵');
+        overlay.remove();
+        openProfileModal();
+      }catch(e){
+        let friendly = e.message;
+        if(e.code === 'auth/credential-already-in-use'){
+          friendly = '這個 Google 帳號已經被別的帳號連結過了';
+        } else if(e.code === 'auth/popup-closed-by-user'){
+          friendly = '';
+        } else if(e.code === 'auth/requires-recent-login'){
+          friendly = '這個操作需要重新驗證身分，請先登出重新登入後再試一次';
+        }
+        if(friendly) msgBox.innerHTML = `<div class="auth-err">${esc(friendly)}</div>`;
+        linkGoogleBtn.disabled = false;
+      }
+    };
+  }
+
+  const linkBtn = document.getElementById('linkPasswordBtn');
+  if(linkBtn){
+    linkBtn.onclick = async ()=>{
+      const msgBox = document.getElementById('linkPassMsg');
+      msgBox.innerHTML = '';
+      if(!currentUser.email){
+        msgBox.innerHTML = `<div class="auth-err">這個帳號沒有 Email，無法設定密碼登入</div>`;
+        return;
+      }
+      const pass = document.getElementById('linkPassInput').value;
+      const passConfirm = document.getElementById('linkPassConfirmInput').value;
+      if(pass.length < 6){ msgBox.innerHTML = `<div class="auth-err">密碼至少需要 6 個字元</div>`; return; }
+      if(pass !== passConfirm){ msgBox.innerHTML = `<div class="auth-err">兩次輸入的密碼不一致，請再確認一次</div>`; return; }
+      linkBtn.disabled = true; linkBtn.textContent = '設定中…';
+      try{
+        const cred = firebase.auth.EmailAuthProvider.credential(currentUser.email, pass);
+        await auth.currentUser.linkWithCredential(cred);
+        msgBox.innerHTML = `<div class="auth-ok">設定成功！之後可以用 Email「${esc(currentUser.email)}」+ 這組密碼登入。</div>`;
+        document.getElementById('setPasswordArea').querySelectorAll('input').forEach(i=>i.value='');
+        toast('已設定密碼登入 🔑');
+        linkBtn.textContent = '已設定 ✓';
+      }catch(e){
+        let friendly = e.message;
+        if(e.code === 'auth/requires-recent-login'){
+          friendly = '這個操作需要重新驗證身分，請先登出、用 Google 重新登入後再試一次';
+        } else if(e.code === 'auth/provider-already-linked'){
+          friendly = '這個帳號已經設定過密碼登入了';
+        } else if(e.code === 'auth/weak-password'){
+          friendly = '密碼至少需要 6 個字元';
+        }
+        msgBox.innerHTML = `<div class="auth-err">${esc(friendly)}</div>`;
+        linkBtn.disabled = false; linkBtn.textContent = '設定密碼';
+      }
+    };
+  }
 }
 
 /* ================= FRIENDS ================= */
