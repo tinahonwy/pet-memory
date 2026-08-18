@@ -15,6 +15,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-auth-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 <style>
   :root{
     --paper:#EDEEDF;
@@ -422,13 +423,55 @@ async function pickAvailableColor(excludeUid){
 }
 
 // ---------------- 照片顏色分析（k-means，完全在瀏覽器端跑，不用後端） ----------------
+let u2netSessionPromise = null;
+// 用 U2Net（Apache 2.0 授權，自己host權重，不依賴任何整合包）辨識照片裡的主體，
+// 回傳一個 320x320 的遮罩陣列（0~255，數值越大代表這個位置越可能是貓咪本體而不是背景）
+async function getU2netSession(){
+  if(!u2netSessionPromise){
+    if(typeof ort === 'undefined'){
+      return Promise.reject(new Error('推論引擎沒有載入成功'));
+    }
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+    u2netSessionPromise = ort.InferenceSession.create('./models/u2netp.onnx', { executionProviders: ['wasm'] });
+  }
+  return u2netSessionPromise;
+}
+async function computeSubjectMask(imgEl){
+  const session = await getU2netSession();
+  const size = 320;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imgEl, 0, 0, size, size);
+  const imgData = ctx.getImageData(0, 0, size, size).data;
+
+  // U2Net 訓練時用的正規化參數（ImageNet 標準），輸入格式是 NCHW（每個色版分開存放）
+  const mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
+  const input = new Float32Array(3 * size * size);
+  for(let i=0; i<size*size; i++){
+    input[i]              = (imgData[i*4]/255   - mean[0]) / std[0];
+    input[size*size + i]  = (imgData[i*4+1]/255 - mean[1]) / std[1];
+    input[2*size*size+i]  = (imgData[i*4+2]/255 - mean[2]) / std[2];
+  }
+  const tensor = new ort.Tensor('float32', input, [1, 3, size, size]);
+  const inputName = session.inputNames[0];
+  const results = await session.run({ [inputName]: tensor });
+  const outputName = session.outputNames[0]; // d0：最終融合後的顯著度遮罩
+  const out = results[outputName].data;
+
+  let min = Infinity, max = -Infinity;
+  for(let i=0;i<out.length;i++){ if(out[i]<min) min=out[i]; if(out[i]>max) max=out[i]; }
+  const range = (max - min) || 1;
+  const mask = new Uint8ClampedArray(size*size);
+  for(let i=0;i<out.length;i++){ mask[i] = Math.round((out[i]-min)/range*255); }
+  return { mask, size };
+}
 function rgbToHex(r,g,b){
   return '#' + [r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
 }
-// 從一張圖片抓出最主要的幾個顏色。做法：把圖縮小取樣（加快速度），
-// 過濾掉太亮（近白色，通常是背景/反光）跟太暗（近黑色，通常是陰影）的像素，
-// 剩下的像素用 k-means 分成 k 群，回傳依佔比排序的顏色列表。
-function extractDominantColors(imgEl, k){
+// 從一張圖片抓出最主要的幾個顏色。若有提供 maskInfo（U2Net 辨識出的主體遮罩），
+// 就只取樣落在「貓咪本體」範圍內的像素；沒有的話（例如模型載入失敗）退回用亮度過濾當備援。
+function extractDominantColors(imgEl, k, maskInfo){
   k = k || 4;
   const maxSize = 120; // 縮到這個尺寸以內做分析，肉眼看不出差異但快很多
   const scale = Math.min(1, maxSize / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
@@ -441,12 +484,21 @@ function extractDominantColors(imgEl, k){
   const data = ctx.getImageData(0, 0, w, h).data;
 
   const pixels = [];
-  for(let i=0; i<data.length; i+=4){
-    const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
-    if(a < 200) continue; // 透明部分跳過
-    const brightness = (r+g+b)/3;
-    if(brightness > 240 || brightness < 15) continue; // 過濾近白/近黑（背景、陰影、反光）
-    pixels.push([r,g,b]);
+  for(let y=0; y<h; y++){
+    for(let x=0; x<w; x++){
+      const idx = (y*w+x)*4;
+      const r=data[idx], g=data[idx+1], b=data[idx+2], a=data[idx+3];
+      if(a < 200) continue;
+      if(maskInfo){
+        const mx = Math.min(maskInfo.size-1, Math.floor(x / w * maskInfo.size));
+        const my = Math.min(maskInfo.size-1, Math.floor(y / h * maskInfo.size));
+        if(maskInfo.mask[my*maskInfo.size + mx] < 110) continue; // 判斷為背景，跳過
+      } else {
+        const brightness = (r+g+b)/3;
+        if(brightness > 240 || brightness < 15) continue; // 備援方案：過濾近白/近黑
+      }
+      pixels.push([r,g,b]);
+    }
   }
   if(pixels.length < k) return [];
 
@@ -458,7 +510,6 @@ function extractDominantColors(imgEl, k){
 
   let assignments = new Array(pixels.length).fill(0);
   for(let iter=0; iter<8; iter++){
-    // 分配每個像素到最近的中心
     for(let i=0;i<pixels.length;i++){
       let best=0, bestDist=Infinity;
       for(let c=0;c<k;c++){
@@ -468,7 +519,6 @@ function extractDominantColors(imgEl, k){
       }
       assignments[i] = best;
     }
-    // 重新計算中心點
     const sums = Array.from({length:k}, ()=>[0,0,0,0]);
     for(let i=0;i<pixels.length;i++){
       const c = assignments[i];
@@ -1959,13 +2009,24 @@ function runAppearanceAnalysis(p, imgEl, dataUrl){
   resultArea.classList.remove('hidden');
   resultArea.innerHTML = `
     <img src="${dataUrl}" class="analyze-photo-preview">
-    <div class="empty-state" style="padding:16px 0;"><span class="ic">🔍</span>正在分析顏色…</div>
+    <div class="empty-state" style="padding:16px 0;"><span class="ic">🐾</span>正在辨識貓咪主體…（第一次使用會先下載辨識模型，稍等一下）</div>
   `;
   // 稍微延遲一個 frame 讓「分析中」畫面先畫出來，避免大圖片分析時整個畫面卡住沒反應
-  setTimeout(()=>{
+  setTimeout(async ()=>{
+    let maskInfo = null;
+    try{
+      maskInfo = await computeSubjectMask(imgEl);
+    }catch(err){
+      console.warn('主體辨識失敗，改用亮度過濾當備援：', err);
+      // 辨識失敗不擋流程，退回舊的亮度過濾方式繼續分析，只是準確度會差一點
+    }
+    resultArea.innerHTML = `
+      <img src="${dataUrl}" class="analyze-photo-preview">
+      <div class="empty-state" style="padding:16px 0;"><span class="ic">🔍</span>正在分析顏色…</div>
+    `;
     let colors;
     try{
-      colors = extractDominantColors(imgEl, 4).slice(0, 4);
+      colors = extractDominantColors(imgEl, 4, maskInfo).slice(0, 4);
     }catch(err){
       resultArea.innerHTML = `<img src="${dataUrl}" class="analyze-photo-preview"><div class="empty-state">分析失敗：${esc(err.message)}，換一張照片試試看</div>`;
       return;
