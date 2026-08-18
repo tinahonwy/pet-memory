@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pet Memory</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    background: #faf7f2;
+    color: #3a3a3a;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  p.subtitle { color: #888; margin-top: 0; margin-bottom: 24px; }
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  input {
+    width: 100%;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  button {
+    width: 100%;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 8px;
+    background: #e8a87c;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  button:hover { background: #dd9866; }
+  button.secondary { background: #fff; color: #e8a87c; border: 1px solid #e8a87c; }
+  button.secondary:hover { background: #fdf1e8; }
+  #userStatus { font-size: 14px; color: #555; margin-bottom: 12px; }
+  #logOutput {
+    font-size: 13px;
+    background: #f5f5f5;
+    border-radius: 8px;
+    padding: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1>🐾 Pet Memory</h1>
+<p class="subtitle">連線測試頁面</p>
+
+<div class="card">
+  <div id="userStatus">尚未登入</div>
+
+  <div id="authForm">
+    <input type="email" id="emailInput" placeholder="電子郵件" />
+    <input type="password" id="passwordInput" placeholder="密碼(至少 6 碼)" />
+    <button onclick="handleSignUp()">註冊</button>
+    <button class="secondary" onclick="handleSignIn()">登入</button>
+    <button class="secondary" onclick="handleGoogleSignIn()">用 Google 登入</button>
+  </div>
+
+  <button id="signOutBtn" class="secondary hidden" onclick="handleSignOut()">登出</button>
+</div>
+
+<div class="card">
+  <button onclick="handleTestWrite()">寫入一筆測試資料到 Firestore</button>
+  <button class="secondary" onclick="handleTestRead()">讀取我的測試資料</button>
+</div>
+
+<div class="card">
+  <div id="logOutput">操作紀錄會顯示在這裡...</div>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getAuth,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signInWithPopup,
+    GoogleAuthProvider,
+    signOut,
+    onAuthStateChanged
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import {
+    getFirestore,
+    collection,
+    addDoc,
+    query,
+    getDocs,
+    serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  // ⚠️ 把下面這段換成你自己的 firebaseConfig(在 Firebase Console → 專案設定 → 你的應用程式 裡可以找到)
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT_ID.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const googleProvider = new GoogleAuthProvider();
+
+  let currentUser = null;
+
+  function log(message) {
+    const el = document.getElementById("logOutput");
+    const time = new Date().toLocaleTimeString();
+    el.textContent = `[${time}] ${message}\n` + el.textContent;
+  }
+
+  onAuthStateChanged(auth, (user) => {
+    currentUser = user;
+    const statusEl = document.getElementById("userStatus");
+    const authForm = document.getElementById("authForm");
+    const signOutBtn = document.getElementById("signOutBtn");
+
+    if (user) {
+      statusEl.textContent = `已登入:${user.email || user.displayName}`;
+      authForm.classList.add("hidden");
+      signOutBtn.classList.remove("hidden");
+      log(`登入成功,uid: ${user.uid}`);
+    } else {
+      statusEl.textContent = "尚未登入";
+      authForm.classList.remove("hidden");
+      signOutBtn.classList.add("hidden");
+    }
+  });
+
+  window.handleSignUp = async () => {
+    const email = document.getElementById("emailInput").value;
+    const password = document.getElementById("passwordInput").value;
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+      log("註冊成功");
+    } catch (err) {
+      log("註冊失敗:" + err.message);
+    }
+  };
+
+  window.handleSignIn = async () => {
+    const email = document.getElementById("emailInput").value;
+    const password = document.getElementById("passwordInput").value;
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      log("登入成功");
+    } catch (err) {
+      log("登入失敗:" + err.message);
+    }
+  };
+
+  window.handleGoogleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+      log("Google 登入成功");
+    } catch (err) {
+      log("Google 登入失敗:" + err.message);
+    }
+  };
+
+  window.handleSignOut = async () => {
+    await signOut(auth);
+    log("已登出");
+  };
+
+  window.handleTestWrite = async () => {
+    if (!currentUser) {
+      log("請先登入才能寫入資料");
+      return;
+    }
+    try {
+      const ref = collection(db, "users", currentUser.uid, "testLogs");
+      const docRef = await addDoc(ref, {
+        message: "hello from Pet Memory",
+        createdAt: serverTimestamp()
+      });
+      log("寫入成功,文件 ID: " + docRef.id);
+    } catch (err) {
+      log("寫入失敗:" + err.message);
+    }
+  };
+
+  window.handleTestRead = async () => {
+    if (!currentUser) {
+      log("請先登入才能讀取資料");
+      return;
+    }
+    try {
+      const ref = collection(db, "users", currentUser.uid, "testLogs");
+      const snapshot = await getDocs(query(ref));
+      if (snapshot.empty) {
+        log("目前沒有任何測試資料");
+        return;
+      }
+      snapshot.forEach((doc) => {
+        log(`讀到資料 [${doc.id}]: ${JSON.stringify(doc.data())}`);
+      });
+    } catch (err) {
+      log("讀取失敗:" + err.message);
+    }
+  };
+</script>
+
+</body>
+</html>
