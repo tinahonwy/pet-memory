@@ -310,6 +310,20 @@
   }
   .block-overlay .msg{font-size:14px;font-weight:600;color:var(--ink-soft);}
   @keyframes spin{to{transform:rotate(360deg);}}
+
+  .appearance-block{background:var(--paper);border-radius:12px;padding:12px;margin-bottom:10px;}
+  .appearance-block .lbl{font-size:10.5px;color:var(--ink-soft);margin-bottom:8px;font-weight:600;letter-spacing:.5px;}
+  .appearance-empty-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .appearance-preview-row{display:flex;align-items:center;gap:10px;}
+  .appearance-dot{width:26px;height:26px;border-radius:50%;flex-shrink:0;border:1.5px solid var(--line);}
+  .appearance-dot-sm{width:16px;height:16px;border-radius:50%;flex-shrink:0;border:1px solid var(--line);}
+  .swatch-row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 6px;}
+  .swatch-btn{width:56px;height:56px;border-radius:12px;border:2px solid transparent;cursor:pointer;padding:0;position:relative;flex-shrink:0;}
+  .swatch-btn.selected{border-color:var(--ink);box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--ink);}
+  .swatch-btn .pct{position:absolute;bottom:3px;right:5px;font-size:9.5px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.7);font-weight:600;}
+  .swatch-hex{font-size:11px;color:var(--ink-soft);text-align:center;margin-top:4px;font-family:'IBM Plex Mono',monospace;}
+  .swatch-col{display:flex;flex-direction:column;align-items:center;}
+  .analyze-photo-preview{width:100%;max-height:200px;object-fit:cover;border-radius:12px;margin-bottom:12px;display:block;}
 </style>
 </head>
 <body>
@@ -344,6 +358,15 @@ const LOG_TYPE_ICON = {meal:"🍖", vet:"🩺", med:"💊", discomfort:"🤒", w
 const SEVERITY_OPTIONS = ["","輕微","中等","嚴重"];
 const LEFTOVER_OPTIONS = ["","吃光光","剩一點","剩一半","剩大半","幾乎沒吃"];
 const OTHER_CAT_SUGGESTIONS = ["用品","美容","保險","住宿","交通"];
+const PATTERN_TYPES = [
+  {id:'solid', label:'素色', icon:'⚪'},
+  {id:'tabby', label:'虎斑', icon:'🐯'},
+  {id:'calico', label:'三花', icon:'🎨'},
+  {id:'tuxedo', label:'賓士', icon:'🎩'},
+  {id:'tortoiseshell', label:'玳瑁', icon:'🟤'},
+  {id:'pointed', label:'重點色', icon:'🔷'},
+  {id:'other', label:'其他花紋', icon:'✨'}
+];
 
 function esc(s){return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function todayStr(){
@@ -396,6 +419,73 @@ async function pickAvailableColor(excludeUid){
     for(const c of PALETTE){ if(!taken.has(c)) return c; }
   }catch(e){ console.error(e); }
   return PALETTE[0];
+}
+
+// ---------------- 照片顏色分析（k-means，完全在瀏覽器端跑，不用後端） ----------------
+function rgbToHex(r,g,b){
+  return '#' + [r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}
+// 從一張圖片抓出最主要的幾個顏色。做法：把圖縮小取樣（加快速度），
+// 過濾掉太亮（近白色，通常是背景/反光）跟太暗（近黑色，通常是陰影）的像素，
+// 剩下的像素用 k-means 分成 k 群，回傳依佔比排序的顏色列表。
+function extractDominantColors(imgEl, k){
+  k = k || 4;
+  const maxSize = 120; // 縮到這個尺寸以內做分析，肉眼看不出差異但快很多
+  const scale = Math.min(1, maxSize / Math.max(imgEl.naturalWidth, imgEl.naturalHeight));
+  const w = Math.max(1, Math.round(imgEl.naturalWidth * scale));
+  const h = Math.max(1, Math.round(imgEl.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imgEl, 0, 0, w, h);
+  const data = ctx.getImageData(0, 0, w, h).data;
+
+  const pixels = [];
+  for(let i=0; i<data.length; i+=4){
+    const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
+    if(a < 200) continue; // 透明部分跳過
+    const brightness = (r+g+b)/3;
+    if(brightness > 240 || brightness < 15) continue; // 過濾近白/近黑（背景、陰影、反光）
+    pixels.push([r,g,b]);
+  }
+  if(pixels.length < k) return [];
+
+  // 初始化 k 個中心點（平均分布抽樣，比隨機抽穩定一點）
+  let centroids = [];
+  for(let i=0;i<k;i++){
+    centroids.push(pixels[Math.floor(i * pixels.length / k)].slice());
+  }
+
+  let assignments = new Array(pixels.length).fill(0);
+  for(let iter=0; iter<8; iter++){
+    // 分配每個像素到最近的中心
+    for(let i=0;i<pixels.length;i++){
+      let best=0, bestDist=Infinity;
+      for(let c=0;c<k;c++){
+        const dr=pixels[i][0]-centroids[c][0], dg=pixels[i][1]-centroids[c][1], db=pixels[i][2]-centroids[c][2];
+        const dist = dr*dr+dg*dg+db*db;
+        if(dist < bestDist){ bestDist = dist; best = c; }
+      }
+      assignments[i] = best;
+    }
+    // 重新計算中心點
+    const sums = Array.from({length:k}, ()=>[0,0,0,0]);
+    for(let i=0;i<pixels.length;i++){
+      const c = assignments[i];
+      sums[c][0]+=pixels[i][0]; sums[c][1]+=pixels[i][1]; sums[c][2]+=pixels[i][2]; sums[c][3]++;
+    }
+    for(let c=0;c<k;c++){
+      if(sums[c][3]>0) centroids[c] = [sums[c][0]/sums[c][3], sums[c][1]/sums[c][3], sums[c][2]/sums[c][3]];
+    }
+  }
+
+  const counts = new Array(k).fill(0);
+  assignments.forEach(a=>counts[a]++);
+  const total = pixels.length;
+  return centroids
+    .map((c,i)=>({ hex: rgbToHex(c[0],c[1],c[2]), pct: Math.round(counts[i]/total*100) }))
+    .filter(c=>c.pct>0)
+    .sort((a,b)=>b.pct-a.pct);
 }
 function userName(uid){
   const u = allUsers.find(x=>x.uid===uid);
@@ -1325,6 +1415,7 @@ function renderPetDetail(){
       </div>
       ${p.notes ? `<div class="pet-note-block"><div class="lbl">備註</div>${esc(p.notes)}</div>` : ''}
       ${p.vaccineNotes ? `<div class="pet-note-block"><div class="lbl">疫苗 / 醫療紀錄</div>${esc(p.vaccineNotes)}</div>` : ''}
+      ${appearanceBlockHTML(p)}
       <div class="pet-detail-actions">
         <button class="edit" id="editPetBtn">✎ 編輯資料</button>
         ${isMine(p.ownerId) ? `<button class="del" id="delPetBtn">🗑 刪除寵物</button>` : ''}
@@ -1344,6 +1435,7 @@ function renderPetDetail(){
   document.getElementById('editPetBtn').onclick = ()=>{ view='editPet'; editingPet=p; renderAddPetForm(); };
   const delBtn = document.getElementById('delPetBtn');
   if(delBtn) delBtn.onclick = ()=>deletePet(p);
+  bindAppearanceBlock(p);
   page.querySelectorAll('#logTypeSeg button').forEach(b=>{
     b.onclick = ()=>{ if(editingLog) return; addLogType = b.dataset.type; renderPetDetail(); };
   });
@@ -1788,6 +1880,191 @@ async function deleteLog(petId, logId){
     await db.collection('pets').doc(petId).collection('logs').doc(logId).delete();
     toast('已刪除');
   }catch(e){ toast('刪除失敗：'+e.message); }
+}
+
+// ================= 外觀分析（照片 → 主要毛色 / 花紋） =================
+function appearanceBlockHTML(p){
+  const ap = p.appearanceParams;
+  if(!ap || !ap.furColor){
+    return `
+      <div class="appearance-block">
+        <div class="lbl">外觀分析</div>
+        <div class="appearance-empty-row">
+          <span style="font-size:12.5px;color:var(--ink-soft);">還沒分析過，之後 3D 造型會用這裡的顏色</span>
+          <button class="add-fab" id="openAppearanceBtn" style="flex-shrink:0;">📷 分析毛色</button>
+        </div>
+      </div>
+    `;
+  }
+  const patternInfo = PATTERN_TYPES.find(x=>x.id===ap.pattern) || PATTERN_TYPES[0];
+  return `
+    <div class="appearance-block">
+      <div class="lbl">外觀分析</div>
+      <div class="appearance-empty-row">
+        <div class="appearance-preview-row">
+          <span class="appearance-dot" style="background:${ap.furColor};"></span>
+          ${ap.furColorSecondary ? `<span class="appearance-dot-sm" style="background:${ap.furColorSecondary};margin-left:-14px;"></span>` : ''}
+          <span style="font-size:13px;color:var(--ink);">${patternInfo.icon} ${patternInfo.label}</span>
+        </div>
+        <button class="add-fab" id="openAppearanceBtn" style="flex-shrink:0;background:var(--surface);color:var(--moss-deep);border:1.5px solid var(--moss-soft);">重新分析</button>
+      </div>
+    </div>
+  `;
+}
+function bindAppearanceBlock(p){
+  const btn = document.getElementById('openAppearanceBtn');
+  if(btn) btn.onclick = ()=>openAppearanceModal(p);
+}
+
+function openAppearanceModal(p){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'appearanceModalOverlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-head"><h3 class="display">分析 ${esc(p.name)} 的毛色</h3><button class="modal-close" id="closeAppearanceModal">✕</button></div>
+      <p style="font-size:12.5px;color:var(--ink-soft);line-height:1.6;margin:0 0 14px;">上傳一張清楚、背景單純的照片，系統會抓出照片中最主要的幾個顏色，你可以再自己選出毛色跟花紋類型。</p>
+      <div id="appearanceStepUpload">
+        <div class="photo-box" id="appearancePhotoBox">
+          <div class="placeholder"><span class="ic">📷</span>點一下選擇照片</div>
+        </div>
+        <input type="file" id="appearancePhotoInput" accept="image/*" style="display:none">
+      </div>
+      <div id="appearanceStepResult" class="hidden"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('closeAppearanceModal').onclick = ()=>overlay.remove();
+  overlay.onclick = (ev)=>{ if(ev.target===overlay) overlay.remove(); };
+
+  const photoBox = document.getElementById('appearancePhotoBox');
+  const fileInput = document.getElementById('appearancePhotoInput');
+  photoBox.onclick = ()=>fileInput.click();
+  fileInput.onchange = (e)=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      const img = new Image();
+      img.onload = ()=>runAppearanceAnalysis(p, img, ev.target.result);
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+}
+
+function runAppearanceAnalysis(p, imgEl, dataUrl){
+  document.getElementById('appearanceStepUpload').classList.add('hidden');
+  const resultArea = document.getElementById('appearanceStepResult');
+  resultArea.classList.remove('hidden');
+  resultArea.innerHTML = `
+    <img src="${dataUrl}" class="analyze-photo-preview">
+    <div class="empty-state" style="padding:16px 0;"><span class="ic">🔍</span>正在分析顏色…</div>
+  `;
+  // 稍微延遲一個 frame 讓「分析中」畫面先畫出來，避免大圖片分析時整個畫面卡住沒反應
+  setTimeout(()=>{
+    let colors;
+    try{
+      colors = extractDominantColors(imgEl, 4).slice(0, 4);
+    }catch(err){
+      resultArea.innerHTML = `<img src="${dataUrl}" class="analyze-photo-preview"><div class="empty-state">分析失敗：${esc(err.message)}，換一張照片試試看</div>`;
+      return;
+    }
+    if(colors.length===0){
+      resultArea.innerHTML = `<img src="${dataUrl}" class="analyze-photo-preview"><div class="empty-state">這張照片顏色變化太少，分析不出主要毛色，換一張試試看</div>`;
+      return;
+    }
+    renderAppearanceResult(p, dataUrl, colors);
+  }, 30);
+}
+
+function renderAppearanceResult(p, dataUrl, colors){
+  const resultArea = document.getElementById('appearanceStepResult');
+  const existing = p.appearanceParams || {};
+  let selectedPrimary = 0;
+  let selectedSecondary = colors.length>1 ? 1 : null;
+  let selectedPattern = existing.pattern || 'solid';
+
+  function draw(){
+    resultArea.innerHTML = `
+      <img src="${dataUrl}" class="analyze-photo-preview">
+      <div class="lbl" style="font-size:11.5px;color:var(--ink-soft);font-weight:600;margin-bottom:2px;">分析出的主要顏色（點選最像毛色的那個當主色，可以再點一個當花紋色）</div>
+      <div class="swatch-row" id="colorSwatchRow">
+        ${colors.map((c,i)=>`
+          <div class="swatch-col">
+            <button type="button" class="swatch-btn ${i===selectedPrimary?'selected':''}" data-idx="${i}" style="background:${c.hex};">
+              <span class="pct">${c.pct}%</span>
+            </button>
+            <span class="swatch-hex">${c.hex}</span>
+          </div>
+        `).join('')}
+      </div>
+      <p style="font-size:11.5px;color:var(--ink-soft);margin:2px 0 12px;">主色：<strong id="primaryHexLabel">${colors[selectedPrimary].hex}</strong>${selectedSecondary!=null?` ・花紋色：<strong id="secondaryHexLabel">${colors[selectedSecondary].hex}</strong>`:''}</p>
+
+      <div class="lbl" style="font-size:11.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px;">花紋類型</div>
+      <div class="chip-row" id="patternChipRow" style="margin-bottom:16px;">
+        ${PATTERN_TYPES.map(pt=>`<button type="button" class="cat-chip ${pt.id===selectedPattern?'selected':''}" data-pattern="${pt.id}" style="${pt.id===selectedPattern?'border-color:var(--moss);color:var(--moss-deep);background:var(--moss-soft);':''}">${pt.icon} ${pt.label}</button>`).join('')}
+      </div>
+
+      <div id="appearanceSaveMsg"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="saveAppearanceBtn" style="flex:1;">儲存外觀設定</button>
+        <button class="btn btn-ghost" id="reuploadBtn" style="width:auto;">換一張照片</button>
+      </div>
+    `;
+
+    resultArea.querySelectorAll('.swatch-btn').forEach(btn=>{
+      btn.onclick = ()=>{
+        const idx = Number(btn.dataset.idx);
+        if(idx === selectedPrimary){
+          return; // 已經是主色，點自己沒作用
+        }
+        if(idx === selectedSecondary){
+          selectedSecondary = null; // 再點一次花紋色會取消它
+        } else if(selectedPrimary == null){
+          selectedPrimary = idx;
+        } else {
+          // 用 shift 邏輯簡化：第一次點別的顏色=換主色，按住不切換太複雜，這裡固定「點一下=設為主色，原本主色自動變花紋色」
+          selectedSecondary = selectedPrimary;
+          selectedPrimary = idx;
+        }
+        draw();
+      };
+    });
+    resultArea.querySelectorAll('[data-pattern]').forEach(btn=>{
+      btn.onclick = ()=>{ selectedPattern = btn.dataset.pattern; draw(); };
+    });
+    document.getElementById('reuploadBtn').onclick = ()=>{
+      document.getElementById('appearanceStepUpload').classList.remove('hidden');
+      resultArea.classList.add('hidden');
+      resultArea.innerHTML = '';
+      document.getElementById('appearancePhotoInput').value = '';
+    };
+    document.getElementById('saveAppearanceBtn').onclick = async ()=>{
+      const btn = document.getElementById('saveAppearanceBtn');
+      btn.disabled = true; btn.textContent = '儲存中…';
+      const appearanceParams = {
+        furColor: colors[selectedPrimary].hex,
+        furColorSecondary: selectedSecondary!=null ? colors[selectedSecondary].hex : null,
+        pattern: selectedPattern,
+        analyzedAt: firebase.firestore.FieldValue.serverTimestamp()
+      };
+      try{
+        await db.collection('pets').doc(p.id).update({ appearanceParams });
+        p.appearanceParams = { ...appearanceParams, analyzedAt: {toDate:()=>new Date()} };
+        if(ownPetsMap[p.id]) ownPetsMap[p.id] = {...ownPetsMap[p.id], appearanceParams: p.appearanceParams};
+        if(friendPetsMap[p.id]) friendPetsMap[p.id] = {...friendPetsMap[p.id], appearanceParams: p.appearanceParams};
+        rebuildAllPets();
+        toast('已儲存外觀設定 🎨');
+        document.getElementById('appearanceModalOverlay').remove();
+        if(selectedPetId === p.id) renderPetDetail();
+      }catch(e){
+        document.getElementById('appearanceSaveMsg').innerHTML = `<div class="auth-err">儲存失敗：${esc(e.message)}</div>`;
+        btn.disabled = false; btn.textContent = '儲存外觀設定';
+      }
+    };
+  }
+  draw();
 }
 
 
